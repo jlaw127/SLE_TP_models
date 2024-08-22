@@ -1,0 +1,217 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r}
+# Load original datasets. When doing data analysis, we can only access test data
+data_train <- read.csv('data/data_train_log.csv')
+data_test <- read.csv('data/data_test_log.csv')
+```
+
+```{r}
+# plot histograms for numerical predictors and pie chart for categorical ones
+for (predictor in names(data_train)) {
+  if (is.numeric(data_train[[predictor]]) && 
+      all(data_train[[predictor]] %in% c(0, 1))){
+      next
+  } else {
+#  hist(data_train[[predictor]], 
+#       main = paste("Histogram of", predictor), 
+#       xlab = predictor)
+    
+    
+    # Generate a Q-Q plot
+    qqnorm(data_train[[predictor]],
+           main = paste("Q-Q Plot of", predictor))
+    qqline(data_train[[predictor]])  # Add a reference line
+  }
+}
+
+```
+
+```{r}
+summary(data_train)
+
+```
+
+
+
+
+
+```{r}
+plot_histograms <- function(data, predictors, predictors_per_row = 3) {
+  num_images <- ceiling(length(predictors) / predictors_per_row)
+  
+  for (img_number in 1:num_images) {
+    png_filename <- sprintf("histogram_%d.png", img_number)
+    png(png_filename, width = 1800, height = 600) # Adjust size as needed for clarity and readability
+    
+    current_predictors <- predictors[((img_number - 1) * predictors_per_row + 1):min(img_number * predictors_per_row, length(predictors))]
+    
+    par(mfrow = c(1, predictors_per_row), mar = c(5, 4, 4, 2) + 0.1)
+    
+    for (predictor in current_predictors) {
+      hist(data[[predictor]], 
+           main = paste(predictor),
+           xlab = paste(" "), 
+           ylab = paste(" "),
+           cex.main = 4,
+           col = "skyblue") # Adjust the axis tick labels size
+          # Generate a Q-Q plot
+#    qqnorm(data_train[[predictor]],
+#           main = paste(predictor),
+#           cex.main = 4,
+#           )
+#    qqline(data_train[[predictor]])  # Add a reference line
+    }
+    
+    dev.off()
+  }
+}
+
+numeric_predictors <- names(data_train)[sapply(data_train, function(x) is.numeric(x) && !all(x %in% c(0, 1)))]
+
+plot_histograms(data_train, numeric_predictors, 3)
+
+```
+
+
+
+
+
+
+```{r}
+library(dplyr)
+
+# check_variables(dataset, target_variable) checks all variables in dataset
+# with respect to target_variable 
+check_variables <- function(dataset, target_variable) {
+  results <- data.frame(Variable = character(), 
+                        P_Value = numeric(), 
+                        stringsAsFactors = FALSE)
+  
+  for (predictor in names(dataset)) {
+    if (predictor != target_variable) {
+      # Check if predictor is categorical or continuous
+      if (is.numeric(dataset[[predictor]]) && all(dataset[[predictor]] %in% c(0, 1))) { 
+        # predictor is categorical, use Chi-squared test
+        test_result <- chisq.test(table(dataset[[predictor]], 
+                                        dataset[[target_variable]]))
+      } else {
+        # var is continuous, use Shapiro-Wilk test for normality on the whole variable
+        shapiro_test <- shapiro.test(dataset[[predictor]])
+        if (shapiro_test$p.value < 0.05) {
+          # var is not normally distributed, use Mann-Whitney U test
+          test_result <- wilcox.test(dataset[[predictor]] ~ dataset[[target_variable]],
+                                     data = dataset)
+        } else {
+          # var is normally distributed, use t-test
+          paste('normal', predictor)
+          test_result <- t.test(dataset[[predictor]] ~ dataset[[target_variable]],
+                                data = dataset)
+        }
+      }
+      # Append results
+      results <- results %>% 
+        rbind(data.frame(Variable = predictor,
+                         P_Value = test_result$p.value))
+    }
+  }
+  return(results)
+}
+
+```
+
+```{r}
+# univariate analysis results
+uni_var_analysis_results <- check_variables(data_train, "Disease")
+print(uni_var_analysis_results)
+
+# Filter results for variables with P < 0.05
+significant_vars <- subset(uni_var_analysis_results, P_Value < 0.05)
+print(significant_vars)
+```
+
+```{r}
+
+# Extract the significant columns from both training and test datasets
+
+data_train_ua <- data_train[, c('Disease', 'Fatigue', 'Rash', 'Alopecia', 
+                                'Arthritis', 'Morning_Stiffness', 'PI',
+                                'PH', 'CI', 'AIHA', 'Leukopenia','SLEDAI',
+                                'L', 'E', 'Hb', 'C4', 'Ur', 'Cr', 'AST', 
+                                'ALB', 'TBIL', 'LDH', 'log_C3',
+                                'log_CFB', 'log_IgA', 'log_IgG', 'log_K')]
+
+data_test_ua <- data_test[, c('Disease', 'Fatigue', 'Rash', 'Alopecia', 
+                                'Arthritis', 'Morning_Stiffness', 'PI',
+                                'PH', 'CI', 'AIHA', 'Leukopenia','SLEDAI',
+                                'L', 'E', 'Hb', 'C4', 'Ur', 'Cr', 'AST', 
+                                'ALB', 'TBIL', 'LDH', 'log_C3',
+                                'log_CFB', 'log_IgA', 'log_IgG', 'log_K')]
+
+
+```
+
+```{r}
+# Seperate dataset
+X_train <- as.matrix(data_train_ua[,-1])  # predictors
+
+# Normalize the X_train
+X_train_normalized <- scale(X_train)
+
+y_train <- data_train_ua[, 1]  # response
+
+```
+
+```{r}
+library(glmnet)
+library(caret)
+
+set.seed(2023) 
+# Fit the Lasso model Using glmnet(). alpha = 1 is for Lasso regression
+lasso_model <- glmnet(X_train_normalized, y_train, 
+                      family = "binomial",
+                      alpha = 1)
+# Standardize predictors because Lasso is sensitive to the scale of predictors.
+plot(lasso_model, xvar="lambda", label=TRUE)
+
+# Perform cross-validation to find the optimal lambda using cv.glmnet().
+cv_lasso <- cv.glmnet(X_train_normalized, y_train, alpha = 1)
+# Plot the Cross-Validation Curve
+plot(cv_lasso)
+
+optimal_lambda <- cv_lasso$lambda.min
+print(paste("Optimal lambda:", optimal_lambda))
+
+opt_lambda <- cv_lasso$lambda.1se
+print(paste("1se lambda:", opt_lambda))
+
+selected_features <-predict(lasso_model,
+                            s = optimal_lambda,
+                            type = "coefficients")
+print(selected_features)
+
+```
+
+```{r}
+# Now subset the data_train using relevant features
+data_train_lasso <- data_train[, c('Disease', 'Fatigue', 'Rash', 'Alopecia','Arthritis', 'Morning_Stiffness', 'PI', 'PH', 'CI', 'AIHA', 'Leukopenia','SLEDAI','L','E', 'Hb', 'C4', 'Ur', 'TBIL', 'LDH', 'log_CFB', 'log_IgA', 'log_IgG', 'log_K')]
+
+data_test_lasso <- data_test[, c('Disease', 'Fatigue', 'Rash', 'Alopecia','Arthritis', 'Morning_Stiffness', 'PI', 'PH', 'CI', 'AIHA', 'Leukopenia','SLEDAI','L','E', 'Hb', 'C4', 'Ur', 'TBIL', 'LDH', 'log_CFB', 'log_IgA', 'log_IgG', 'log_K')]
+
+
+
+
+write.csv(data_train_lasso, "data_train_lasso.csv", row.names = FALSE)
+write.csv(data_test_lasso, "data_test_lasso.csv", row.names = FALSE)
+```
+
+```{r}
+library(corrplot)
+my_cor <- cor(data_train_lasso[, -1])
+corrplot(my_cor, method = "circle")
+
+```

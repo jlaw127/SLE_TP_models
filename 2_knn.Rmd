@@ -1,0 +1,216 @@
+---
+title: "KNN"
+output: html_document
+date: "2023-11-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Preparation
+```{r}
+# Load data
+train_data <- read.csv('data/data_train_lasso.csv')
+test_data <- read.csv('data/data_test_lasso.csv')
+
+actual_values <- test_data$disease
+```
+
+## Model Fitting
+
+```{r}
+# Load required libraries
+library(class)
+library(caret)
+library(Metrics)
+library(pROC)
+library(plotROC)
+library(ggplot2)
+library(rms)
+```
+
+
+```{r}
+## this function is to extract the names of numeric predictors
+extract_numeric <- function(data) {
+  numeric_cols <- c()
+  
+  for (predictor in names(data)) {
+    if (is.numeric(data[[predictor]]) && 
+        all(data[[predictor]] %in% c(0, 1))) {
+      next
+    } else {
+      numeric_cols <- c(numeric_cols, predictor)
+    }
+  }
+  return(numeric_cols)
+}
+
+```
+
+
+```{r}
+# separate numeric and binary predictors
+train_data_numeric <- train_data[, extract_numeric(train_data)]
+test_data_numeric <- test_data[, extract_numeric(test_data)]
+
+# Convert column names to indices
+numeric_col_indices <- match(extract_numeric(train_data), names(train_data))
+
+train_data_binary <- train_data[, -numeric_col_indices]
+test_data_binary <- test_data[, -numeric_col_indices]
+```
+
+
+由于 KNN 依赖于距离计算（比如欧几里得距离），因此对变量进行标度十分重要，这样就不会因为某个变量的标度而在距离计算中占据主导地位。将数据标准化（使其均值为零，方差为单位）是一种常见的做法。
+
+```{r}
+# Scale the training data (subtracts the mean and divides by the standard deviation, resulting in a dataset with a mean of 0 and a standard deviation of 1 for each column).
+train_data_scaled <- scale(train_data_numeric)
+
+# Calculate the mean and standard deviation of the training data
+train_means <- attr(train_data_scaled, "scaled:center")
+train_sds <- attr(train_data_scaled, "scaled:scale")
+
+# Scale the test data using the training data parameters
+test_data_scaled <- scale(test_data_numeric,
+                          center = train_means,
+                          scale = train_sds)
+
+# Combine scaled numeric and binary features
+train_combined <- cbind(train_data_binary, train_data_scaled)
+test_combined <- cbind(test_data_binary, test_data_scaled)
+```
+
+
+```{r}
+# convert `disease` to a factor
+train_combined$disease <- factor(train_combined$disease,
+                                 levels = c(0, 1),
+                                 labels = c("NoDisease", "Disease"))
+test_combined$disease <- factor(test_combined$disease,
+                                levels = c(0, 1),
+                                labels = c("NoDisease", "Disease"))
+
+actual_values_factor <- test_combined$disease
+```
+
+
+
+```{r}
+train_control <- trainControl(method="cv", number=10, 
+                              summaryFunction=twoClassSummary, 
+                              classProbs=TRUE, # Required for AUC calculation
+                              savePredictions=TRUE)
+
+# Define a grid to search for k
+grid <- expand.grid(k = seq(1, 24, 1))
+
+
+# Train the model using AUC as the metric
+knn_fit <- train(disease ~ ., 
+                 data=train_combined,
+                 method="knn", 
+                 metric="ROC", 
+                 trControl=train_control,
+                 tuneGrid=grid
+                 )
+
+# Print the results
+print(knn_fit)
+```
+
+```{r}
+# Predicted probabilities on the test set
+predictions <- predict(knn_fit, newdata = test_combined, type = "prob")[, "Disease"]
+
+
+# Convert probabilities to class labels based on the threshold
+threshold = 0.5
+knn_class_predictions <- ifelse(predictions > threshold, "Disease", "NoDisease")
+predictions_factor <- factor(knn_class_predictions, levels = c("NoDisease", "Disease"))
+
+```
+
+
+## Metrics
+```{r} 
+# Compute ROC curve
+roc_curve <- roc(actual_values, predictions)
+
+# Calculate the AUC
+auc_value <- auc(roc_curve)
+print(auc_value)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(predictions_factor, actual_values_factor)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+```
+
+
+
+```{r}
+# Prepare the data for ggplot
+df_for_plot <- data.frame(
+  D = actual_values,
+  M = predictions
+)
+
+# Create the ROC plot with AUC
+roc_plot <- ggplot(df_for_plot, aes(m = M, d = D)) +
+  geom_roc() +
+  style_roc() +
+  geom_text(aes(x = 0.5,
+                y = .1, 
+                label = paste("AUC = ", round(auc_value, 4))), 
+            size = 5)
+
+# Plot ROC with AUC
+print(roc_plot)
+
+
+# Calibration curve might not be applicable for KNN as it doesn't output probabilities
+```
+
+
+
+
+## Permutation Feature Importance
+
+一种用于衡量预测模型中各个特征（feature）重要性的技术。这种方法的基本思想是观察当随机改变（或“置换”）某个特征的值时，模型的性能（如准确率、AUC等）如何变化。这种变化通常被解释为该特征对模型预测能力的重要性。下面是它的工作原理：
+
+训练模型：首先，需要有一个已经训练好的模型。
+
+评估基线性能：在改变任何特征之前，首先评估模型在测试集上的初始性能。这个性能指标（如准确率、AUC等）将作为比较的基线。
+
+特征置换：接下来，选取一个特征，将其在测试集中的所有值随机打乱。这意味着这些值被重新分配给了不同的观察点，从而破坏了该特征与目标变量之间的关系。
+
+评估性能变化：在打乱特定特征之后，再次用测试集评估模型的性能。由于特定特征与目标变量的关系被破坏，模型的性能预计会下降。
+
+计算重要性：特征的重要性通常由模型性能的降低程度来衡量。如果一个特征非常重要，那么随机改变它的值应该会显著降低模型的性能。相反，如果改变一个特征的值对模型性能影响不大，那么这个特征可能不那么重要。
+
+重复和汇总：对数据集中的每个特征重复上述步骤，然后将每个特征的重要性汇总以进行比较。
+
+
+
+
+```{r}
+library(randomForest)
+
+# Permutation feature importance
+set.seed(2023) # for reproducibility
+importance_results <- varImp(knn_fit, test_combined, useModel = TRUE)
+
+print(importance_results)
+
+
+```
+
+
+
+
+

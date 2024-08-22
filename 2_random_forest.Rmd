@@ -1,0 +1,160 @@
+---
+title: "Random Forest"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Preparation
+
+
+```{r}
+# Load data
+train_data <- read.csv('data_train_lasso.csv')
+test_data <- read.csv('data_test_lasso.csv')
+actual_values <- test_data$Disease
+```
+
+
+```{r}
+# convert categorical vars into factors
+for (predictor in names(train_data)) {
+  if (is.numeric(train_data[[predictor]]) && 
+      all(train_data[[predictor]] %in% c(0, 1))) {
+    train_data[[predictor]] <- as.factor(train_data[[predictor]])
+  }
+}
+
+for (predictor in names(test_data)) {
+  if (is.numeric(test_data[[predictor]]) && 
+      all(test_data[[predictor]] %in% c(0, 1))) {
+    test_data[[predictor]] <- as.factor(test_data[[predictor]])
+  }
+}
+
+actual_values_factor <- test_data$Disease
+
+```
+
+
+## Model Fitting
+
+```{r}
+# Load required libraries
+library(randomForest)
+library(pROC)
+library(plotROC)
+library(ggplot2)
+library(rms)
+library(caret)
+```
+
+
+```{r}
+# Build Random Forest model
+# ntree: Number of trees
+rf_model <- randomForest(Disease ~ .,
+                         data=train_data,
+                         ntree=500,
+                         na.action=na.omit,
+                         importance = TRUE)
+
+```
+
+## Prediction
+```{r}
+# get predictions
+predictions <- predict(rf_model, test_data, type="prob")[, '1']
+
+# convert probabilities in `predictions` to class labels
+threshold = 0.5
+class_predictions = ifelse(predictions > threshold, 1, 0)
+class_predictions_factor <- factor(class_predictions)
+
+```
+
+
+## Metrics
+```{r} 
+# Compute ROC curve
+roc_curve <- roc(actual_values, predictions)
+# Calculate the AUC
+auc_value <- auc(roc_curve)
+print(auc_value)
+
+#######################
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(class_predictions_factor,
+                               actual_values_factor)
+
+
+
+# Print the confusion matrix
+print(conf_matrix)
+```
+
+
+## Plots
+```{r}
+# Plot ROC
+
+# prepare the data for plotting
+df_for_plot <- data.frame(
+  D = actual_values,
+  M = predictions
+)
+
+# Create the ROC plot with AUC
+roc_plot <- ggplot(df_for_plot, aes(m = M, d = D)) +
+  geom_roc() +
+  style_roc() +
+  geom_text(aes(x = 0.5, y = .1, label = paste("AUC =", round(auc_value, 4))), 
+            size = 5)
+
+# Plot ROC with AUC
+print(roc_plot)
+```
+
+```{r}
+# Calibration Curve
+# Prepare data for Calibration Curve
+calibration_data <- data.frame(disease = actual_values, 
+                               predicted = predictions)
+
+# Fit logistic regression model for calibration with x=TRUE and y=TRUE
+calib_model <- lrm(disease ~ predicted, 
+                   data=calibration_data,
+                   x=TRUE, y=TRUE)
+
+# Plot Calibration Curve
+calib_plot <- calibrate(calib_model, method="boot", B=1000)
+plot(calib_plot)
+
+```
+
+## Feature Analysis
+
+```{r}
+importance_scores <- importance(rf_model)
+
+# Sort features by importance
+feature_importance <- importance_scores[order(importance_scores[, "MeanDecreaseGini"], decreasing = TRUE),]
+
+# Plotting feature importance
+varImpPlot(rf_model, type=1, main="Mean Decrease Gini Importance")
+
+print(feature_importance)
+```
+
+
+
+
+
+
+
+

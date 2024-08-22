@@ -1,0 +1,194 @@
+---
+title: "XGBoost"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Preparation
+
+```{r}
+# Load data
+train_data <- read.csv('data_train_lasso.csv')
+test_data <- read.csv('data_test_lasso.csv')
+```
+
+
+## Model Fitting
+
+```{r}
+# Load required libraries
+library(xgboost)
+library(caret)
+library(pROC)
+library(plotROC)
+library(ggplot2)
+library(rms)
+```
+
+
+```{r}
+# Prepare matrices for XGBoost
+X_train <- train_data[, -1]
+y_train <- train_data$disease
+y_train_factor <- factor(y_train, levels = c(0, 1))
+
+X_test <- test_data[, -1]
+y_test <- test_data$disease
+y_test_factor <- factor(y_test, levels = c(0, 1))
+
+# convert to a matrices
+X_train_matrix <- as.matrix(X_train)
+X_test_matrix <- as.matrix(X_test)
+
+```
+
+
+```{r}
+# Define the parameter grid correctly
+xgb_param_grid <- expand.grid(
+  nrounds = c(100, 200, 300),
+  max_depth = c(3, 4, 5),
+  eta = c(0.1, 0.01, 0.001),
+  gamma = 0,  # Add other parameters as necessary
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+# Train the model using caret
+xgb_model <- train(
+  x = X_train,
+  y = y_train,
+  method = "xgbTree",
+  trControl = trainControl(method = "cv", number = 10),
+  tuneGrid = xgb_param_grid
+)
+
+# Get the best model
+best_xgb_model <- xgb_model$finalModel
+
+```
+
+
+```{r}
+# get predictions
+predictions <- predict(best_xgb_model, newdata = X_test_matrix)
+
+# convert probabilities in `predictions` to class labels
+threshold = 0.5
+class_predictions = ifelse(predictions > threshold, 1, 0)
+class_predictions_factor <- factor(class_predictions)
+
+```
+
+
+## Metrics
+```{r} 
+# Compute ROC curve
+roc_curve <- roc(y_test, predictions)
+# Calculate the AUC
+auc_value <- auc(roc_curve)
+print(auc_value)
+
+#######################
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(class_predictions_factor,
+                               y_test_factor)
+
+# Print the confusion matrix
+print(conf_matrix)
+```
+
+
+```{r}
+# Prepare the data for ggplot
+df_for_plot <- data.frame(D = y_test, M = predictions)
+
+# Calculate the AUC
+roc_curve <- roc(df_for_plot$D, df_for_plot$M)
+auc_value <- auc(roc_curve)
+
+# Create the ROC plot with AUC
+roc_plot <- ggplot(df_for_plot, aes(m = M, d = D)) +
+  geom_roc() +
+  style_roc() +
+  geom_text(aes(x = 0.5, y = .1, 
+                label = paste("AUC =", round(auc_value, 5))), 
+            size = 5)
+
+# Plot ROC with AUC
+print(roc_plot)
+```
+
+
+```{r}
+# Prepare data for Calibration Curve
+calibration_data <- data.frame(disease = test_data$disease, predicted = predictions)
+
+# Fit logistic regression model for calibration
+calib_model <- lrm(disease ~ predicted, data=calibration_data, x=TRUE, y=TRUE)
+
+# Plot Calibration Curve
+calib_plot <- calibrate(calib_model, method="boot", B=1000)
+plot(calib_plot, main="Calibration Curve for XGBoost")
+
+```
+
+
+
+
+
+
+
+
+```{r}
+# Get feature importance
+importance_matrix <- xgb.importance(
+  feature_names = colnames(X_train),
+  model = best_xgb_model)
+
+# Print feature importance
+print(importance_matrix)
+
+# Plot feature importance
+xgb.plot.importance(importance_matrix)
+
+
+```
+
+Gain, Cover, and Frequency: XGBoost feature importance can be evaluated in terms of gain (the average gain of a feature when it is used in trees), cover (the average coverage of a feature when it is used in trees), and frequency (the relative frequency of a feature being used in trees).
+
+
+```{r}
+# Plotting Gain, Cover, and Frequency
+xgb.plot.importance(importance_matrix, measure = "Gain")
+xgb.plot.importance(importance_matrix, measure = "Cover")
+xgb.plot.importance(importance_matrix, measure = "Frequency")
+
+```
+
+
+XGBoost特征重要性可以从三个维度来评估：增益(Gain)、覆盖(Cover)和频率(Frequency)
+
+### 增益 (Gain)
+
+- **定义：** 增益是指当特征被用作决策树分裂点时，该特征带来的平均信息增益或减少的不纯度。它是衡量特征分裂提升模型预测准确性的一个重要指标。
+- **解释：** 在决策树中，每一次分裂都旨在使得子节点比父节点拥有更低的不纯度。增益表示的是这种分裂带来的“好处”有多大。如果一个特征在树模型中频繁被用来分裂并且每次分裂都显著降低了不纯度，那么我们可以认为这个特征非常重要。
+
+### 覆盖 (Cover)
+
+- **定义：** 覆盖是指一个特征被用作分裂点时，影响的数据样本数目的平均值。它可以被看作是特征影响范围的度量。
+- **解释：** 覆盖衡量了特征分裂点下样本的数量。一个高覆盖值意味着该特征在分裂时影响了大量的样本。这意味着该特征对模型的决策边界有较大的影响，可以认为是一个重要的特征。
+
+### 频率 (Frequency)
+
+- **定义：** 频率是指一个特征被用作分裂点的相对次数，即在所有分裂中，该特征被选为分裂点的频率。
+- **解释：** 频率提供了一个特征被选作分裂点的相对次数的视角。高频率意味着一个特征在构建决策树的过程中被频繁选中用于分裂，表明这个特征在区分不同类别或回归预测中起到了关键作用。
+
+总结：在使用XGBoost等基于树的模型时，通过分析增益、覆盖和频率这三个指标，我们能更全面地理解每个特征对模型预测性能的贡献程度。增益告诉我们特征的分裂效用有多大，覆盖显示了特征分裂影响的样本范围，而频率则反映了特征被选作分裂点的常见程度。通过这些指标，我们可以识别出哪些特征对模型最为重要，进而为特征选择、模型解释和后续的数据分析提供依据。
+
+

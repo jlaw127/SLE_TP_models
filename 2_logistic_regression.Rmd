@@ -1,0 +1,104 @@
+---
+output:
+  word_document: default
+  html_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load required libraries
+library(pROC)
+library(plotROC)
+library(ggplot2)
+library(rms)
+library(knitr)
+library(caret)
+library(MASS)
+```
+
+
+```{r}
+# Load Lasso data 
+data_train_lasso <- read.csv('data_train_lasso.csv')
+data_test_lasso <- read.csv('data_test_lasso.csv')
+```
+
+
+```{r}
+# Fit logistic regression model
+log_reg <- glm(Disease ~ ., data = data_train_lasso, family = "binomial")
+
+# Predict on test data
+predictions <- predict(log_reg, data_test_lasso, type = "response")
+
+summary(log_reg)
+
+```
+
+
+```{r}
+# Convert predictions to binary class
+threshold <- 0.5
+predicted_class <- ifelse(predictions > threshold, 1, 0)
+
+# Actual class from the test data
+actual_class <- data_test_lasso$Disease
+
+# Confusion Matrix
+conf_matrix <- confusionMatrix(factor(predicted_class), factor(actual_class))
+print(conf_matrix)
+
+```
+
+## Plots
+
+```{r}
+# Plot ROC
+df_for_plot <- data.frame(
+  D = data_test_lasso$Disease,
+  M = predictions
+)
+
+# Calculate the AUC
+roc_curve <- roc(df_for_plot$D, df_for_plot$M)
+auc_value <- auc(roc_curve)
+
+# Create the ROC plot with AUC
+roc_plot <- ggplot(df_for_plot, aes(m = M, d = D)) +
+  geom_roc() +
+  style_roc() +
+  geom_text(aes(x = 0.5, y = .1, label = paste("AUC =", round(auc_value, 5))), 
+            size = 5)
+
+print(roc_plot)
+```
+
+
+
+
+```{r}
+# Plot Calibration Curve
+calibration_data <- data.frame(Disease = data_test_lasso$Disease,
+                               predicted = predictions)
+
+# Fit logistic regression model for calibration
+calib_model <- lrm(Disease ~ predicted, 
+                   data = calibration_data,
+                   x=TRUE, y=TRUE)
+
+# Plot Calibration Curve
+calib_plot <- calibrate(calib_model, 
+                        method = "boot",
+                        B = 1000)
+plot(calib_plot)
+
+```
+
+
+
+
+

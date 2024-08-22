@@ -1,0 +1,181 @@
+---
+title: "SVM"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Preparation
+
+```{r}
+# Load data
+train_data <- read.csv('data_train_lasso.csv')
+test_data <- read.csv('data_test_lasso.csv')
+
+y_test <- test_data$Disease
+```
+
+
+```{r}
+# convert categorical vars into factors
+for (predictor in names(train_data)) {
+  if (is.numeric(train_data[[predictor]]) && 
+      all(train_data[[predictor]] %in% c(0, 1))) {
+    train_data[[predictor]] <- as.factor(train_data[[predictor]])
+  }
+}
+
+for (predictor in names(test_data)) {
+  if (is.numeric(test_data[[predictor]]) && 
+      all(test_data[[predictor]] %in% c(0, 1))) {
+    test_data[[predictor]] <- as.factor(test_data[[predictor]])
+  }
+}
+
+y_test_factor <- test_data$Disease
+```
+
+
+## Model Fitting
+
+```{r}
+# Install and load necessary packages
+library(e1071)
+library(pROC)
+library(plotROC)
+library(ggplot2)
+library(rms)
+library(caret)
+```
+
+
+```{r}
+# SVM model
+svm_model <- svm(
+  Disease ~ ., 
+  data = train_data, 
+  type = "C-classification",
+  kernel = "radial",
+  probability=TRUE,
+  )
+```
+
+```{r}
+# Predictions
+predictions <- predict(svm_model, test_data, probability = TRUE)
+probabilities <- attr(predictions, "probabilities")[, "1"]
+```
+
+## Metrics
+```{r} 
+# Compute ROC curve
+roc_curve <- roc(y_test, probabilities)
+# Calculate the AUC
+auc_value <- auc(roc_curve)
+print(auc_value)
+
+##############
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(predictions, y_test_factor)
+
+# Print the confusion matrix
+print(conf_matrix)
+```
+
+## Plots
+
+```{r}
+# Prepare the data for ggplot
+df_for_plot <- data.frame(
+  D = y_test,  # Convert factor to numeric 0/1
+  M = probabilities
+)
+
+# Create the ROC plot with AUC
+roc_plot <- ggplot(df_for_plot, aes(m = M, d = D)) +
+  geom_roc() +
+  style_roc() +
+  geom_text(aes(x = 0.5, y = .1, label = paste("AUC =", round(auc_value, 5))), 
+            size = 5)
+
+# Plot ROC with AUC
+print(roc_plot)
+
+```
+
+
+```{r}
+# Create a data frame with the actual and predicted probabilities
+calibration_data <- data.frame(
+  Actual = test_data$Disease,
+  Predicted = probabilities
+)
+
+# Fit logistic regression model for calibration
+cal_model <- lrm(Actual ~ Predicted, 
+                 data = calibration_data,
+                 x=TRUE, y=TRUE)
+
+# Then perform the bootstrap calibration
+cal_results <- calibrate(cal_model, method="boot", B=1000)
+
+# Plot the calibration curve
+plot(cal_results)
+
+```
+
+
+
+## Permutation Importance
+
+This involves randomly shuffling each predictor and measuring the change in the model's performance. A large decrease in model performance indicates that the feature is important.
+
+```{r}
+# Define a function to calculate the metric of interest, e.g., accuracy
+calculate_accuracy <- function(model, data) {
+  predictions <- predict(model, newdata = data, probability = TRUE)
+  probabilities <- attr(predictions, "probabilities")[, "1"]
+  actual <- data$Disease
+  # mean(predictions == actual)
+  roc_obj <- roc(actual, probabilities)
+  auc(roc_obj)
+}
+
+  
+
+# Calculate baseline accuracy
+baseline_accuracy <- calculate_accuracy(svm_model, train_data)
+
+# Initialize a vector to store feature importances
+feature_importances <- rep(NA, ncol(train_data) - 1)
+names(feature_importances) <- names(train_data)[names(train_data) != "Disease"]
+
+# Permute each feature and calculate its importance
+set.seed(123) # for reproducibility
+for (feature in names(feature_importances)) {
+  # Permute the feature
+  temp_data <- train_data
+  temp_data[[feature]] <- sample(temp_data[[feature]])
+
+  # Calculate accuracy with the permuted feature
+  permuted_accuracy <- calculate_accuracy(svm_model, temp_data)
+
+  # Calculate the importance (drop in accuracy)
+  feature_importances[feature] <- baseline_accuracy - permuted_accuracy
+}
+
+# Sorting feature importance in descending order
+sorted_feature_importances <- sort(feature_importances, decreasing = TRUE)
+
+# Display the sorted feature importance
+sorted_feature_importances
+
+
+```
+
+
+
+
