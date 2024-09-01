@@ -63,7 +63,6 @@ test_data_binary <- test_data[, -numeric_col_indices]
 ```
 
 
-由于 KNN 依赖于距离计算（比如欧几里得距离），因此对变量进行标度十分重要，这样就不会因为某个变量的标度而在距离计算中占据主导地位。将数据标准化（使其均值为零，方差为单位）是一种常见的做法。
 
 ```{r}
 # Scale the training data (subtracts the mean and divides by the standard deviation, resulting in a dataset with a mean of 0 and a standard deviation of 1 for each column).
